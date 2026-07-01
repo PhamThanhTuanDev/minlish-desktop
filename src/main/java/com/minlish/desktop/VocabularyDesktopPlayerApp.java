@@ -8,12 +8,14 @@ import com.sun.net.httpserver.HttpServer;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
+import javax.swing.ButtonGroup;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
+import javax.swing.JRadioButton;
 import javax.swing.JWindow;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
@@ -60,10 +62,10 @@ public final class VocabularyDesktopPlayerApp {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(15);
-    private static final String DEFAULT_BASE_URL = System.getenv().getOrDefault("MINLISH_API_BASE_URL", "http://localhost:8080");
-    private static final String DEFAULT_EMAIL = System.getenv().getOrDefault("MINLISH_EMAIL", "");
+    private static final String DEFAULT_BASE_URL = System.getenv().getOrDefault("MINLISH_API_BASE_URL", "https://api.minlish.site");
+    private static final String DEFAULT_EMAIL = System.getenv().getOrDefault("MINLISH_EMAIL", "phamthanhtuan.developer@gmail.com");
     private static final String DEFAULT_SET_ID = System.getenv().getOrDefault("MINLISH_SET_ID", "");
-    private static final String DEFAULT_PASSWORD = System.getenv().getOrDefault("MINLISH_PASSWORD", "");
+    private static final String DEFAULT_PASSWORD = System.getenv().getOrDefault("MINLISH_PASSWORD", "123456");
     private static final long GOOGLE_CALLBACK_WAIT_SECONDS = 180;
 
     public static void main(String[] args) {
@@ -96,7 +98,10 @@ public final class VocabularyDesktopPlayerApp {
                     window.showOverlay();
                 });
             } catch (RuntimeException ex) {
-                SwingUtilities.invokeLater(() -> showError("Khong tai duoc tu vung", unwrapMessage(ex)));
+                // In lỗi chi tiết ra console để debug
+                ex.printStackTrace();
+                // Hiển thị thông báo lỗi cụ thể hơn cho người dùng
+                SwingUtilities.invokeLater(() -> showError("Lỗi khi tải dữ liệu", ex.getMessage()));
             }
         }, "minlish-loader").start();
     }
@@ -106,6 +111,18 @@ public final class VocabularyDesktopPlayerApp {
         JTextField emailField = new JTextField(DEFAULT_EMAIL, 28);
         JPasswordField passwordField = new JPasswordField(DEFAULT_PASSWORD, 28);
         JTextField setIdField = new JTextField(DEFAULT_SET_ID, 28);
+
+        JRadioButton googleAuthRadio = new JRadioButton("Đăng nhập Google");
+        JRadioButton passwordAuthRadio = new JRadioButton("Đăng nhập Email/Password", true);
+        ButtonGroup authGroup = new ButtonGroup();
+        authGroup.add(googleAuthRadio);
+        authGroup.add(passwordAuthRadio);
+
+        JPanel authPanel = new JPanel();
+        authPanel.setLayout(new BoxLayout(authPanel, BoxLayout.X_AXIS));
+        authPanel.add(googleAuthRadio);
+        authPanel.add(Box.createHorizontalStrut(10));
+        authPanel.add(passwordAuthRadio);
 
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -125,6 +142,16 @@ public final class VocabularyDesktopPlayerApp {
         addConfigRow(panel, labelConstraints, fieldConstraints, 1, "Email", emailField);
         addConfigRow(panel, labelConstraints, fieldConstraints, 2, "Password", passwordField);
         addConfigRow(panel, labelConstraints, fieldConstraints, 3, "Set ID", setIdField);
+
+        GridBagConstraints authLabelConstraints = (GridBagConstraints) labelConstraints.clone();
+        authLabelConstraints.gridy = 4;
+        authLabelConstraints.insets = new Insets(12, 0, 4, 10);
+        panel.add(new JLabel("Phương thức:"), authLabelConstraints);
+
+        GridBagConstraints authFieldConstraints = (GridBagConstraints) fieldConstraints.clone();
+        authFieldConstraints.gridy = 4;
+        authFieldConstraints.insets = new Insets(12, 0, 4, 0);
+        panel.add(authPanel, authFieldConstraints);
 
         int result = JOptionPane.showConfirmDialog(
                 null,
@@ -155,10 +182,7 @@ public final class VocabularyDesktopPlayerApp {
             return null;
         }
 
-        AuthMode authMode = chooseAuthMode();
-        if (authMode == null) {
-            return null;
-        }
+        AuthMode authMode = googleAuthRadio.isSelected() ? AuthMode.GOOGLE : AuthMode.PASSWORD;
 
         if (authMode == AuthMode.PASSWORD && (email.isBlank() || password.isBlank())) {
             showError("Thieu thong tin", "Dang nhap Email/Password can dien day du email va password.");
@@ -166,27 +190,6 @@ public final class VocabularyDesktopPlayerApp {
         }
 
         return new AppConfig(baseUrl, email, password, setId, authMode);
-    }
-
-    private AuthMode chooseAuthMode() {
-        Object[] options = {"Dang nhap Google", "Dang nhap Email/Password", "Huy"};
-        int choice = JOptionPane.showOptionDialog(
-                null,
-                "Chon kieu dang nhap",
-                "MinLish Desktop Player",
-                JOptionPane.DEFAULT_OPTION,
-                JOptionPane.QUESTION_MESSAGE,
-                null,
-                options,
-                options[0]);
-
-        if (choice == 0) {
-            return AuthMode.GOOGLE;
-        }
-        if (choice == 1) {
-            return AuthMode.PASSWORD;
-        }
-        return null;
     }
 
     private void addConfigRow(JPanel panel, GridBagConstraints labelConstraints, GridBagConstraints fieldConstraints, int row, String label, Component field) {
@@ -426,34 +429,43 @@ public final class VocabularyDesktopPlayerApp {
 
     private final class AppWindow extends JWindow {
 
-        private static final int MARGIN = 16;
+        private static final int MARGIN = 0;
 
         private final JLabel wordLabel = new JLabel("Word");
+        private final JLabel pronunciationLabel = new JLabel("Pronunciation");
         private final JLabel typeLabel = new JLabel("Type");
         private final JLabel meaningLabel = new JLabel("Meaning");
-        private final JButton previousButton = createButton("PRE");
+        private final JButton previousButton = createButton("<");
         private final JButton speakButton = createButton("SPEAK");
-        private final JButton nextButton = createButton("NEXT");
+        private final JButton nextButton = createButton(">");
+        private final JButton closeButton = createButton("X");
 
         private List<VocabularyCard> cards = Collections.emptyList();
         private int currentIndex = 0;
+        private final WindowsAppBarHelper appBarHelper = new WindowsAppBarHelper();
 
         private AppWindow() {
             setBackground(new Color(0, 0, 0, 0));
+            
             setAlwaysOnTop(true);
             setFocusableWindowState(false);
 
             JPanel card = new RoundedCardPanel();
             card.setLayout(new BoxLayout(card, BoxLayout.X_AXIS));
-            card.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
+             card.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
 
-            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 150);
-            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 13), new Color(183, 210, 255), 100);
-            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 250);
+            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 100);
+            styleLabel(pronunciationLabel, new Font("SansSerif", Font.ITALIC, 14), new Color(200, 200, 200), 80);
+            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 13), new Color(183, 210, 255), 30);
+            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 150);
 
             previousButton.addActionListener(e -> showPrevious());
             speakButton.addActionListener(e -> speakCurrentWord());
             nextButton.addActionListener(e -> showNext());
+            closeButton.addActionListener(e -> {
+            appBarHelper.unregisterAppBar();
+            System.exit(0);
+        });
 
             card.add(previousButton);
             card.add(Box.createHorizontalStrut(8));
@@ -461,11 +473,15 @@ public final class VocabularyDesktopPlayerApp {
             card.add(Box.createHorizontalStrut(12));
             card.add(wordLabel);
             card.add(Box.createHorizontalStrut(12));
+            card.add(pronunciationLabel);
+            card.add(Box.createHorizontalStrut(8));
             card.add(typeLabel);
             card.add(Box.createHorizontalStrut(12));
             card.add(meaningLabel);
             card.add(Box.createHorizontalStrut(12));
             card.add(nextButton);
+            card.add(Box.createHorizontalStrut(8));
+            card.add(closeButton);
 
             setContentPane(card);
             pack();
@@ -479,14 +495,18 @@ public final class VocabularyDesktopPlayerApp {
 
         private void showOverlay() {
             refreshCard();
-            placeBottomLeft();
-            setVisible(true);
+            repositionWindow();
+            setVisible(true); // Bắt buộc phải setVisible trước để hệ điều hành cấp phát HWND
+            
+            // Yêu cầu Windows biến cửa sổ này thành AppBar
+            appBarHelper.registerAppBar(this);
         }
 
         private void refreshCard() {
             VocabularyCard card = currentCard();
             if (card == null) {
                 wordLabel.setText("No data");
+                pronunciationLabel.setText("");
                 typeLabel.setText("");
                 meaningLabel.setText("Chua co tu vung nao trong set nay.");
                 previousButton.setEnabled(false);
@@ -496,6 +516,7 @@ public final class VocabularyDesktopPlayerApp {
             }
 
             wordLabel.setText(textOrDash(card.word));
+            pronunciationLabel.setText(textOrDash(card.pronunciation));
             typeLabel.setText(card.type == null || card.type.isBlank() ? "" : "(" + card.type.trim() + ")");
             meaningLabel.setText(toHtml(textOrDash(card.meaning), 260));
 
@@ -504,7 +525,7 @@ public final class VocabularyDesktopPlayerApp {
             speakButton.setEnabled(true);
 
             pack();
-            placeBottomLeft();
+            repositionWindow();
         }
 
         private VocabularyCard currentCard() {
@@ -563,7 +584,7 @@ public final class VocabularyDesktopPlayerApp {
             process.waitFor();
         }
 
-        private void placeBottomLeft() {
+        private void repositionWindow() {
             GraphicsConfiguration configuration = getGraphicsConfiguration();
             if (configuration == null) {
                 configuration = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration();
@@ -571,9 +592,14 @@ public final class VocabularyDesktopPlayerApp {
 
             Rectangle screenBounds = configuration.getBounds();
             Insets screenInsets = Toolkit.getDefaultToolkit().getScreenInsets(configuration);
-            int x = screenBounds.x + MARGIN;
-            int y = screenBounds.y + screenBounds.height - screenInsets.bottom - getHeight() - MARGIN;
-            setLocation(x, y);
+            
+            // Position the window as a full-width bar just above the taskbar.
+            int width = screenBounds.width;
+            int height = getHeight(); // Height is determined by pack()
+            int x = screenBounds.x;
+            int y = screenBounds.y + screenBounds.height - screenInsets.bottom - height;
+            
+            setBounds(x, y, width, height);
         }
 
         private JButton createButton(String text) {
@@ -616,7 +642,7 @@ public final class VocabularyDesktopPlayerApp {
         private RoundedCardPanel() {
             setOpaque(false);
             setBackground(new Color(20, 26, 38, 220));
-            setBorder(BorderFactory.createLineBorder(new Color(255, 255, 255, 28), 1, true));
+            setBorder(BorderFactory.createLineBorder(new Color(255, 255, 255, 28), 1));
         }
 
         @Override
@@ -625,7 +651,7 @@ public final class VocabularyDesktopPlayerApp {
             try {
                 graphics2D.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 graphics2D.setColor(getBackground());
-                graphics2D.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 22, 22);
+                graphics2D.fillRect(0, 0, getWidth(), getHeight());
             } finally {
                 graphics2D.dispose();
             }
