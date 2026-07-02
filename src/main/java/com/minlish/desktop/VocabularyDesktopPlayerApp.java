@@ -11,7 +11,9 @@ import javax.swing.Box;
 import javax.swing.ButtonGroup;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JMenuItem;
 import javax.swing.JLabel;
+import javax.swing.JPopupMenu;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
@@ -20,11 +22,13 @@ import javax.swing.JWindow;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Desktop;
 import java.awt.Dimension;
+import java.awt.BorderLayout;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
@@ -33,9 +37,12 @@ import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -101,7 +108,8 @@ public final class VocabularyDesktopPlayerApp {
                 // In lỗi chi tiết ra console để debug
                 ex.printStackTrace();
                 // Hiển thị thông báo lỗi cụ thể hơn cho người dùng
-                SwingUtilities.invokeLater(() -> showError("Lỗi khi tải dữ liệu", ex.getMessage()));
+                String message = unwrapMessage(ex);
+                SwingUtilities.invokeLater(() -> showError("Lỗi khi tải dữ liệu", message));
             }
         }, "minlish-loader").start();
     }
@@ -156,7 +164,7 @@ public final class VocabularyDesktopPlayerApp {
         int result = JOptionPane.showConfirmDialog(
                 null,
                 panel,
-                "MinLish Desktop Player",
+                "Đăng nhập",
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);
 
@@ -211,6 +219,365 @@ public final class VocabularyDesktopPlayerApp {
             throw new IllegalStateException("Bo tu nay chua co du lieu de hien thi.");
         }
         return new LoadSession(token, cards);
+    }
+    private final class AppWindow extends JWindow {
+
+        private static final int DOCKED_BAR_HEIGHT = 54;
+
+        private enum PlacementMode {
+            ABOVE_SCREEN,
+            BELOW_SCREEN,
+            OVERLAID_ON_SCREEN
+        }
+
+        private final JLabel statusLabel = new JLabel("");
+        private final JLabel wordLabel = new JLabel("Word");
+        private final JLabel pronunciationLabel = new JLabel("Pronunciation");
+        private final JLabel typeLabel = new JLabel("Type");
+        private final JLabel meaningLabel = new JLabel("Meaning");
+        private final JButton previousButton = createButton("<");
+        private final JButton speakButton = createButton("SPEAK");
+        private final JButton nextButton = createButton(">");
+        private final JButton settingsButton = createButton("⚙");
+        private final JButton closeButton = createButton("X");
+        private final JPopupMenu settingsMenu = new JPopupMenu();
+
+        private final WindowsAppBarHelper appBarHelper = new WindowsAppBarHelper();
+        private final MouseAdapter dragHandler = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent event) {
+                if (!SwingUtilities.isLeftMouseButton(event)) {
+                    return;
+                }
+
+                Point screenPoint = event.getLocationOnScreen();
+                Point windowPoint = SwingUtilities.convertPoint((Component) event.getSource(), event.getPoint(), AppWindow.this);
+
+                if (placementMode != PlacementMode.OVERLAID_ON_SCREEN) {
+                    switchToOverlaidMode();
+                }
+
+                dragOffset = windowPoint;
+                floatingLocation = new Point(screenPoint.x - windowPoint.x, screenPoint.y - windowPoint.y);
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent event) {
+                if (placementMode != PlacementMode.OVERLAID_ON_SCREEN || dragOffset == null) {
+                    return;
+                }
+
+                Point screenPoint = event.getLocationOnScreen();
+                int x = screenPoint.x - dragOffset.x;
+                int y = screenPoint.y - dragOffset.y;
+                setLocation(x, y);
+                floatingLocation = new Point(x, y);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent event) {
+                if (placementMode == PlacementMode.OVERLAID_ON_SCREEN) {
+                    floatingLocation = getLocation();
+                }
+                dragOffset = null;
+            }
+        };
+
+        private List<VocabularyCard> cards = Collections.emptyList();
+        private int currentIndex = 0;
+        private PlacementMode placementMode = PlacementMode.OVERLAID_ON_SCREEN;
+        private Point dragOffset;
+        private Point floatingLocation;
+        private int dockedEdge = WindowsAppBarHelper.ABE_BOTTOM;
+
+        private AppWindow() {
+            setBackground(new Color(0, 0, 0, 0));
+            setFocusableWindowState(true);
+
+            styleLabel(statusLabel, new Font("SansSerif", Font.BOLD, 11), new Color(200, 200, 200), 16);
+            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 96);
+            styleLabel(pronunciationLabel, new Font("SansSerif", Font.ITALIC, 14), new Color(200, 200, 200), 88);
+            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 13), new Color(183, 210, 255), 64);
+            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 240);
+
+            previousButton.addActionListener(e -> showPrevious());
+            speakButton.addActionListener(e -> speakCurrentWord());
+            nextButton.addActionListener(e -> showNext());
+            settingsButton.addActionListener(e -> toggleSettingsMenu());
+            closeButton.addActionListener(e -> {
+                appBarHelper.unregisterAppBar();
+                System.exit(0);
+            });
+
+            JMenuItem aboveScreenItem = new JMenuItem("Above screen");
+            aboveScreenItem.addActionListener(e -> switchToAboveScreenMode());
+            JMenuItem belowScreenItem = new JMenuItem("Below screen");
+            belowScreenItem.addActionListener(e -> switchToBelowScreenMode());
+            JMenuItem overlaidItem = new JMenuItem("Overlaid on screen");
+            overlaidItem.addActionListener(e -> switchToOverlaidMode());
+            settingsMenu.add(aboveScreenItem);
+            settingsMenu.add(belowScreenItem);
+            settingsMenu.add(overlaidItem);
+
+            JPanel root = new RoundedCardPanel();
+            root.setOpaque(false);
+            root.setLayout(new BorderLayout(12, 0));
+            root.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+
+            JPanel leftCluster = new JPanel();
+            leftCluster.setOpaque(false);
+            leftCluster.setLayout(new BoxLayout(leftCluster, BoxLayout.X_AXIS));
+            installDragHandler(leftCluster);
+            installDragHandler(statusLabel);
+
+            leftCluster.add(statusLabel);
+            leftCluster.add(Box.createHorizontalStrut(10));
+            leftCluster.add(previousButton);
+            leftCluster.add(Box.createHorizontalStrut(8));
+            leftCluster.add(speakButton);
+
+            JPanel textCluster = new JPanel();
+            textCluster.setOpaque(false);
+            textCluster.setLayout(new BoxLayout(textCluster, BoxLayout.X_AXIS));
+            textCluster.setMinimumSize(new Dimension(0, 1));
+            textCluster.setPreferredSize(new Dimension(1, 1));
+            textCluster.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+            installDragHandler(textCluster);
+            installDragHandler(wordLabel);
+            installDragHandler(pronunciationLabel);
+            installDragHandler(typeLabel);
+            installDragHandler(meaningLabel);
+
+            textCluster.add(wordLabel);
+            textCluster.add(Box.createHorizontalStrut(14));
+            textCluster.add(pronunciationLabel);
+            textCluster.add(Box.createHorizontalStrut(12));
+            textCluster.add(typeLabel);
+            textCluster.add(Box.createHorizontalStrut(14));
+            textCluster.add(meaningLabel);
+            textCluster.add(Box.createHorizontalStrut(12));
+            textCluster.add(nextButton);
+
+            JPanel rightCluster = new JPanel();
+            rightCluster.setOpaque(false);
+            rightCluster.setLayout(new BoxLayout(rightCluster, BoxLayout.X_AXIS));
+            rightCluster.add(settingsButton);
+            rightCluster.add(Box.createHorizontalStrut(6));
+            rightCluster.add(closeButton);
+
+            root.add(leftCluster, java.awt.BorderLayout.WEST);
+            root.add(textCluster, java.awt.BorderLayout.CENTER);
+            root.add(rightCluster, java.awt.BorderLayout.EAST);
+
+            setContentPane(root);
+            setPreferredSize(new Dimension(1100, 54));
+            pack();
+        }
+
+        private void setCards(List<VocabularyCard> cards) {
+            this.cards = cards == null ? Collections.emptyList() : List.copyOf(cards);
+            this.currentIndex = 0;
+            refreshCard();
+        }
+
+        private void showOverlay() {
+            refreshCard();
+            setVisible(true);
+            applyPlacement();
+        }
+
+        private void refreshCard() {
+            VocabularyCard card = currentCard();
+            if (card == null) {
+                wordLabel.setText("No data");
+                pronunciationLabel.setText("");
+                typeLabel.setText("");
+                meaningLabel.setText("Chua co tu vung nao trong set nay.");
+                previousButton.setEnabled(false);
+                nextButton.setEnabled(false);
+                speakButton.setEnabled(false);
+            } else {
+                wordLabel.setText(textOrDash(card.word));
+                pronunciationLabel.setText(textOrDash(card.pronunciation));
+                typeLabel.setText(card.type == null || card.type.isBlank() ? "" : "(" + card.type.trim() + ")");
+                meaningLabel.setText(toHtml(textOrDash(card.meaning), 200));
+
+                previousButton.setEnabled(cards.size() > 1);
+                nextButton.setEnabled(cards.size() > 1);
+                speakButton.setEnabled(true);
+            }
+
+            if (isVisible()) {
+                applyPlacement();
+            }
+        }
+
+        private void applyPlacement() {
+            if (placementMode == PlacementMode.ABOVE_SCREEN) {
+                applyDockedPlacement(WindowsAppBarHelper.ABE_TOP);
+            } else if (placementMode == PlacementMode.BELOW_SCREEN) {
+                applyDockedPlacement(WindowsAppBarHelper.ABE_BOTTOM);
+            } else {
+                applyOverlaidPlacement();
+            }
+        }
+
+        private void applyDockedPlacement(int edge) {
+            dockedEdge = edge;
+            setAlwaysOnTop(false);
+            setSize(getWidth(), DOCKED_BAR_HEIGHT);
+            appBarHelper.registerAppBar(this, edge);
+        }
+
+        private void applyOverlaidPlacement() {
+            appBarHelper.unregisterAppBar();
+            setAlwaysOnTop(true);
+            GraphicsConfiguration configuration = getGraphicsConfiguration();
+            if (configuration == null) {
+                configuration = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration();
+            }
+
+            Rectangle screenBounds = configuration.getBounds();
+            Insets screenInsets = Toolkit.getDefaultToolkit().getScreenInsets(configuration);
+            int x = screenBounds.x;
+            int width = screenBounds.width;
+            int y = screenBounds.y + screenBounds.height - screenInsets.bottom - getHeight();
+
+            if (floatingLocation != null) {
+                setLocation(floatingLocation);
+                setSize(width, getHeight());
+                return;
+            }
+
+            setSize(width, getHeight());
+            setLocation(x, Math.max(screenBounds.y + 8, y - 8));
+            floatingLocation = getLocation();
+        }
+
+        private void switchToAboveScreenMode() {
+            placementMode = PlacementMode.ABOVE_SCREEN;
+            floatingLocation = null;
+            refreshCard();
+            setVisible(true);
+        }
+
+        private void switchToBelowScreenMode() {
+            placementMode = PlacementMode.BELOW_SCREEN;
+            floatingLocation = null;
+            refreshCard();
+            setVisible(true);
+        }
+
+        private void switchToOverlaidMode() {
+            placementMode = PlacementMode.OVERLAID_ON_SCREEN;
+            refreshCard();
+            setVisible(true);
+        }
+
+        private void toggleSettingsMenu() {
+            if (settingsMenu.isVisible()) {
+                settingsMenu.setVisible(false);
+                return;
+            }
+
+            settingsMenu.show(settingsButton, 0, settingsButton.getHeight());
+        }
+
+        private VocabularyCard currentCard() {
+            if (cards.isEmpty()) {
+                return null;
+            }
+            if (currentIndex < 0) {
+                currentIndex = cards.size() - 1;
+            } else if (currentIndex >= cards.size()) {
+                currentIndex = 0;
+            }
+            return cards.get(currentIndex);
+        }
+
+        private void showPrevious() {
+            if (cards.isEmpty()) {
+                return;
+            }
+            currentIndex = (currentIndex - 1 + cards.size()) % cards.size();
+            refreshCard();
+        }
+
+        private void showNext() {
+            if (cards.isEmpty()) {
+                return;
+            }
+            currentIndex = (currentIndex + 1) % cards.size();
+            refreshCard();
+        }
+
+        private void speakCurrentWord() {
+            VocabularyCard card = currentCard();
+            if (card == null || card.word == null || card.word.isBlank()) {
+                return;
+            }
+
+            String word = card.word.trim();
+            speechExecutor.submit(() -> {
+                try {
+                    speakWithWindowsSpeech(word);
+                } catch (Exception ex) {
+                    Toolkit.getDefaultToolkit().beep();
+                }
+            });
+        }
+
+        private void speakWithWindowsSpeech(String word) throws IOException, InterruptedException {
+            String safeWord = word.replace("'", "''");
+            String script = "Add-Type -AssemblyName System.Speech; "
+                    + "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                    + "$s.Rate = 0; $s.Volume = 100; $s.Speak('" + safeWord + "')";
+
+            Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", script)
+                    .redirectErrorStream(true)
+                    .start();
+            process.waitFor();
+        }
+
+        private void installDragHandler(Component component) {
+            component.addMouseListener(dragHandler);
+            component.addMouseMotionListener(dragHandler);
+        }
+
+        private JButton createButton(String text) {
+            JButton button = new JButton(text);
+            button.setFocusPainted(false);
+            button.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+            button.setBackground(new Color(255, 255, 255, 24));
+            button.setForeground(Color.WHITE);
+            button.setOpaque(true);
+            button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            return button;
+        }
+
+        private void styleLabel(JLabel label, Font font, Color color, int width) {
+            label.setFont(font);
+            label.setForeground(color);
+            label.setOpaque(false);
+            label.setVerticalAlignment(SwingConstants.CENTER);
+            label.setMaximumSize(new Dimension(width, Integer.MAX_VALUE));
+            label.setPreferredSize(new Dimension(width, 28));
+        }
+
+        private String textOrDash(String text) {
+            return text == null || text.isBlank() ? "-" : text.trim();
+        }
+
+        private String toHtml(String text, int width) {
+            return "<html><body style='width:" + width + "px'>" + escapeHtml(text) + "</body></html>";
+        }
+
+        private String escapeHtml(String text) {
+            return text
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;");
+        }
     }
 
     private String loginWithGoogleDesktopFlow(AppConfig config) {
@@ -419,223 +786,10 @@ public final class VocabularyDesktopPlayerApp {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private static final class VocabularyCard {
-        public Long id;
         public String word;
         public String pronunciation;
         public String meaning;
         public String type;
-        public String level;
-    }
-
-    private final class AppWindow extends JWindow {
-
-        private static final int MARGIN = 0;
-
-        private final JLabel wordLabel = new JLabel("Word");
-        private final JLabel pronunciationLabel = new JLabel("Pronunciation");
-        private final JLabel typeLabel = new JLabel("Type");
-        private final JLabel meaningLabel = new JLabel("Meaning");
-        private final JButton previousButton = createButton("<");
-        private final JButton speakButton = createButton("SPEAK");
-        private final JButton nextButton = createButton(">");
-        private final JButton closeButton = createButton("X");
-
-        private List<VocabularyCard> cards = Collections.emptyList();
-        private int currentIndex = 0;
-        private final WindowsAppBarHelper appBarHelper = new WindowsAppBarHelper();
-
-        private AppWindow() {
-            setBackground(new Color(0, 0, 0, 0));
-            
-            setAlwaysOnTop(true);
-            setFocusableWindowState(false);
-
-            JPanel card = new RoundedCardPanel();
-            card.setLayout(new BoxLayout(card, BoxLayout.X_AXIS));
-             card.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
-
-            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 100);
-            styleLabel(pronunciationLabel, new Font("SansSerif", Font.ITALIC, 14), new Color(200, 200, 200), 80);
-            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 13), new Color(183, 210, 255), 30);
-            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 150);
-
-            previousButton.addActionListener(e -> showPrevious());
-            speakButton.addActionListener(e -> speakCurrentWord());
-            nextButton.addActionListener(e -> showNext());
-            closeButton.addActionListener(e -> {
-            appBarHelper.unregisterAppBar();
-            System.exit(0);
-        });
-
-            card.add(previousButton);
-            card.add(Box.createHorizontalStrut(8));
-            card.add(speakButton);
-            card.add(Box.createHorizontalStrut(12));
-            card.add(wordLabel);
-            card.add(Box.createHorizontalStrut(12));
-            card.add(pronunciationLabel);
-            card.add(Box.createHorizontalStrut(8));
-            card.add(typeLabel);
-            card.add(Box.createHorizontalStrut(12));
-            card.add(meaningLabel);
-            card.add(Box.createHorizontalStrut(12));
-            card.add(nextButton);
-            card.add(Box.createHorizontalStrut(8));
-            card.add(closeButton);
-
-            setContentPane(card);
-            pack();
-        }
-
-        private void setCards(List<VocabularyCard> cards) {
-            this.cards = cards == null ? Collections.emptyList() : List.copyOf(cards);
-            this.currentIndex = 0;
-            refreshCard();
-        }
-
-        private void showOverlay() {
-            refreshCard();
-            repositionWindow();
-            setVisible(true); // Bắt buộc phải setVisible trước để hệ điều hành cấp phát HWND
-            
-            // Yêu cầu Windows biến cửa sổ này thành AppBar
-            appBarHelper.registerAppBar(this);
-        }
-
-        private void refreshCard() {
-            VocabularyCard card = currentCard();
-            if (card == null) {
-                wordLabel.setText("No data");
-                pronunciationLabel.setText("");
-                typeLabel.setText("");
-                meaningLabel.setText("Chua co tu vung nao trong set nay.");
-                previousButton.setEnabled(false);
-                nextButton.setEnabled(false);
-                speakButton.setEnabled(false);
-                return;
-            }
-
-            wordLabel.setText(textOrDash(card.word));
-            pronunciationLabel.setText(textOrDash(card.pronunciation));
-            typeLabel.setText(card.type == null || card.type.isBlank() ? "" : "(" + card.type.trim() + ")");
-            meaningLabel.setText(toHtml(textOrDash(card.meaning), 260));
-
-            previousButton.setEnabled(cards.size() > 1);
-            nextButton.setEnabled(cards.size() > 1);
-            speakButton.setEnabled(true);
-
-            pack();
-            repositionWindow();
-        }
-
-        private VocabularyCard currentCard() {
-            if (cards.isEmpty()) {
-                return null;
-            }
-            if (currentIndex < 0) {
-                currentIndex = cards.size() - 1;
-            } else if (currentIndex >= cards.size()) {
-                currentIndex = 0;
-            }
-            return cards.get(currentIndex);
-        }
-
-        private void showPrevious() {
-            if (cards.isEmpty()) {
-                return;
-            }
-            currentIndex = (currentIndex - 1 + cards.size()) % cards.size();
-            refreshCard();
-        }
-
-        private void showNext() {
-            if (cards.isEmpty()) {
-                return;
-            }
-            currentIndex = (currentIndex + 1) % cards.size();
-            refreshCard();
-        }
-
-        private void speakCurrentWord() {
-            VocabularyCard card = currentCard();
-            if (card == null || card.word == null || card.word.isBlank()) {
-                return;
-            }
-
-            String word = card.word.trim();
-            speechExecutor.submit(() -> {
-                try {
-                    speakWithWindowsSpeech(word);
-                } catch (Exception ex) {
-                    Toolkit.getDefaultToolkit().beep();
-                }
-            });
-        }
-
-        private void speakWithWindowsSpeech(String word) throws IOException, InterruptedException {
-            String safeWord = word.replace("'", "''");
-            String script = "Add-Type -AssemblyName System.Speech; "
-                    + "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                    + "$s.Rate = 0; $s.Volume = 100; $s.Speak('" + safeWord + "')";
-
-            Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", script)
-                    .redirectErrorStream(true)
-                    .start();
-            process.waitFor();
-        }
-
-        private void repositionWindow() {
-            GraphicsConfiguration configuration = getGraphicsConfiguration();
-            if (configuration == null) {
-                configuration = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration();
-            }
-
-            Rectangle screenBounds = configuration.getBounds();
-            Insets screenInsets = Toolkit.getDefaultToolkit().getScreenInsets(configuration);
-            
-            // Position the window as a full-width bar just above the taskbar.
-            int width = screenBounds.width;
-            int height = getHeight(); // Height is determined by pack()
-            int x = screenBounds.x;
-            int y = screenBounds.y + screenBounds.height - screenInsets.bottom - height;
-            
-            setBounds(x, y, width, height);
-        }
-
-        private JButton createButton(String text) {
-            JButton button = new JButton(text);
-            button.setFocusPainted(false);
-            button.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-            button.setBackground(new Color(255, 255, 255, 24));
-            button.setForeground(Color.WHITE);
-            button.setOpaque(true);
-            button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            return button;
-        }
-
-        private void styleLabel(JLabel label, Font font, Color color, int width) {
-            label.setFont(font);
-            label.setForeground(color);
-            label.setOpaque(false);
-            label.setVerticalAlignment(SwingConstants.CENTER);
-            label.setMaximumSize(new Dimension(width, Integer.MAX_VALUE));
-            label.setPreferredSize(new Dimension(width, 28));
-        }
-
-        private String textOrDash(String text) {
-            return text == null || text.isBlank() ? "-" : text.trim();
-        }
-
-        private String toHtml(String text, int width) {
-            return "<html><body style='width:" + width + "px'>" + escapeHtml(text) + "</body></html>";
-        }
-
-        private String escapeHtml(String text) {
-            return text
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;");
-        }
     }
 
     private static final class RoundedCardPanel extends JPanel {
