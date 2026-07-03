@@ -45,6 +45,44 @@
           </execution>
         </executions>
       </plugin>
+      <plugin>
+        <groupId>com.akathist.maven.plugins.launch4j</groupId>
+        <artifactId>launch4j-maven-plugin</artifactId>
+        <version>2.5.3</version>
+        <executions>
+          <execution>
+            <id>l4j-clui</id>
+            <phase>package</phase>
+            <goals>
+              <goal>launch4j</goal>
+            </goals>
+            <configuration>
+              <headerType>gui</headerType>
+              <outfile>${project.build.directory}/Minlish.exe</outfile>
+              <jar>${project.build.directory}/${project.artifactId}-${project.version}.jar</jar>
+              <errTitle>Minlish Error</errTitle>
+              <classPath>
+                <mainClass>com.minlish.desktop.VocabularyDesktopPlayerApp</mainClass>
+              </classPath>
+              <jre>
+                <minVersion>17</minVersion>
+              </jre>
+              <versionInfo>
+                <fileVersion>1.0.0.0</fileVersion>
+                <txtFileVersion>1.0.0.0</txtFileVersion>
+                <fileDescription>Minlish Desktop Player</fileDescription>
+                <copyright>Pham Thanh Tuan</copyright>
+                <productVersion>1.0.0.0</productVersion>
+                <txtProductVersion>1.0.0.0</txtProductVersion>
+                <productName>Minlish</productName>
+                <internalName>Minlish</internalName>
+                <originalFilename>Minlish.exe</originalFilename>
+              </versionInfo>
+              <icon>src/main/resources/app_icon.ico</icon>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
   <properties>

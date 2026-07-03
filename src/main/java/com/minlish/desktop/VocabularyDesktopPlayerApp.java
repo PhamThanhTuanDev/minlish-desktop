@@ -11,6 +11,7 @@ import javax.swing.Box;
 import javax.swing.ButtonGroup;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JLabel;
 import javax.swing.JPopupMenu;
@@ -105,9 +106,7 @@ public final class VocabularyDesktopPlayerApp {
                     window.showOverlay();
                 });
             } catch (RuntimeException ex) {
-                // In lỗi chi tiết ra console để debug
                 ex.printStackTrace();
-                // Hiển thị thông báo lỗi cụ thể hơn cho người dùng
                 String message = unwrapMessage(ex);
                 SwingUtilities.invokeLater(() -> showError("Lỗi khi tải dữ liệu", message));
             }
@@ -220,9 +219,10 @@ public final class VocabularyDesktopPlayerApp {
         }
         return new LoadSession(token, cards);
     }
+    
     private final class AppWindow extends JWindow {
 
-        private static final int DOCKED_BAR_HEIGHT = 54;
+        private static final int DOCKED_BAR_HEIGHT = 44;
 
         private enum PlacementMode {
             ABOVE_SCREEN,
@@ -238,6 +238,7 @@ public final class VocabularyDesktopPlayerApp {
         private final JButton previousButton = createButton("<");
         private final JButton speakButton = createButton("SPEAK");
         private final JButton nextButton = createButton(">");
+        private final JButton autoPlayButton = createButton("AUTO: OFF");
         private final JButton settingsButton = createButton("⚙");
         private final JButton closeButton = createButton("X");
         private final JPopupMenu settingsMenu = new JPopupMenu();
@@ -288,41 +289,64 @@ public final class VocabularyDesktopPlayerApp {
         private PlacementMode placementMode = PlacementMode.OVERLAID_ON_SCREEN;
         private Point dragOffset;
         private Point floatingLocation;
-        private int dockedEdge = WindowsAppBarHelper.ABE_BOTTOM;
+        
+        // Quản lý luồng Auto Play
+        private int speechSessionId = 0; 
+        private boolean isAutoPlay = false;
 
         private AppWindow() {
             setBackground(new Color(0, 0, 0, 0));
             setFocusableWindowState(true);
 
-            styleLabel(statusLabel, new Font("SansSerif", Font.BOLD, 11), new Color(200, 200, 200), 16);
-            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 96);
-            styleLabel(pronunciationLabel, new Font("SansSerif", Font.ITALIC, 14), new Color(200, 200, 200), 88);
-            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 13), new Color(183, 210, 255), 64);
-            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 240);
+            styleLabel(statusLabel, new Font("SansSerif", Font.BOLD, 11), new Color(200, 200, 200), 40, false);
+            styleLabel(wordLabel, new Font("SansSerif", Font.BOLD, 19), Color.WHITE, 200, false);
+            styleLabel(pronunciationLabel, new Font("SansSerif", Font.ITALIC, 19), new Color(200, 200, 200), 140, false);
+            styleLabel(typeLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(183, 210, 255), 140, false);
+            styleLabel(meaningLabel, new Font("SansSerif", Font.PLAIN, 14), new Color(240, 240, 240), 400, true);
 
             previousButton.addActionListener(e -> showPrevious());
-            speakButton.addActionListener(e -> speakCurrentWord());
+            speakButton.addActionListener(e -> triggerSpeechSequence());
             nextButton.addActionListener(e -> showNext());
+            autoPlayButton.addActionListener(e -> toggleAutoPlay());
             settingsButton.addActionListener(e -> toggleSettingsMenu());
             closeButton.addActionListener(e -> {
                 appBarHelper.unregisterAppBar();
                 System.exit(0);
             });
 
+            JMenu positionMenu = new JMenu("Position");
             JMenuItem aboveScreenItem = new JMenuItem("Above screen");
             aboveScreenItem.addActionListener(e -> switchToAboveScreenMode());
             JMenuItem belowScreenItem = new JMenuItem("Below screen");
             belowScreenItem.addActionListener(e -> switchToBelowScreenMode());
             JMenuItem overlaidItem = new JMenuItem("Overlaid on screen");
             overlaidItem.addActionListener(e -> switchToOverlaidMode());
-            settingsMenu.add(aboveScreenItem);
-            settingsMenu.add(belowScreenItem);
-            settingsMenu.add(overlaidItem);
+            positionMenu.add(aboveScreenItem);
+            positionMenu.add(belowScreenItem);
+            positionMenu.add(overlaidItem);
+
+            JMenu styleMenu = new JMenu("Caption style");
+            JMenuItem styleDefault = new JMenuItem("Default");
+            styleDefault.addActionListener(e -> setCaptionStyle(18, 14, Color.WHITE, new Color(240, 240, 240))); 
+            
+            JMenuItem styleLarge = new JMenuItem("Large text");
+            styleLarge.addActionListener(e -> setCaptionStyle(26, 18, Color.WHITE, new Color(240, 240, 240))); 
+            
+            JMenuItem styleHighContrast = new JMenuItem("High contrast (Yellow/Yellow)");
+            styleHighContrast.addActionListener(e -> setCaptionStyle(24, 18, Color.YELLOW, Color.YELLOW));
+            
+            styleMenu.add(styleDefault);
+            styleMenu.add(styleLarge);
+            styleMenu.add(styleHighContrast);
+
+            settingsMenu.add(positionMenu);
+            settingsMenu.addSeparator(); 
+            settingsMenu.add(styleMenu);
 
             JPanel root = new RoundedCardPanel();
             root.setOpaque(false);
             root.setLayout(new BorderLayout(12, 0));
-            root.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+            root.setBorder(BorderFactory.createEmptyBorder(2, 12, 2, 12));
 
             JPanel leftCluster = new JPanel();
             leftCluster.setOpaque(false);
@@ -331,17 +355,14 @@ public final class VocabularyDesktopPlayerApp {
             installDragHandler(statusLabel);
 
             leftCluster.add(statusLabel);
-            leftCluster.add(Box.createHorizontalStrut(10));
-            leftCluster.add(previousButton);
-            leftCluster.add(Box.createHorizontalStrut(8));
-            leftCluster.add(speakButton);
-
+            
             JPanel textCluster = new JPanel();
             textCluster.setOpaque(false);
             textCluster.setLayout(new BoxLayout(textCluster, BoxLayout.X_AXIS));
-            textCluster.setMinimumSize(new Dimension(0, 1));
-            textCluster.setPreferredSize(new Dimension(1, 1));
-            textCluster.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+            textCluster.setMinimumSize(new Dimension(0, 36));
+            textCluster.setPreferredSize(new Dimension(600, 36));
+            textCluster.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+            
             installDragHandler(textCluster);
             installDragHandler(wordLabel);
             installDragHandler(pronunciationLabel);
@@ -355,12 +376,21 @@ public final class VocabularyDesktopPlayerApp {
             textCluster.add(typeLabel);
             textCluster.add(Box.createHorizontalStrut(14));
             textCluster.add(meaningLabel);
-            textCluster.add(Box.createHorizontalStrut(12));
-            textCluster.add(nextButton);
+            
+            textCluster.add(Box.createHorizontalGlue());
 
             JPanel rightCluster = new JPanel();
             rightCluster.setOpaque(false);
             rightCluster.setLayout(new BoxLayout(rightCluster, BoxLayout.X_AXIS));
+            
+            rightCluster.add(previousButton);
+            rightCluster.add(Box.createHorizontalStrut(6));
+            rightCluster.add(speakButton);
+            rightCluster.add(Box.createHorizontalStrut(6));
+            rightCluster.add(nextButton);
+            rightCluster.add(Box.createHorizontalStrut(12)); 
+            rightCluster.add(autoPlayButton); 
+            rightCluster.add(Box.createHorizontalStrut(12)); 
             rightCluster.add(settingsButton);
             rightCluster.add(Box.createHorizontalStrut(6));
             rightCluster.add(closeButton);
@@ -370,7 +400,7 @@ public final class VocabularyDesktopPlayerApp {
             root.add(rightCluster, java.awt.BorderLayout.EAST);
 
             setContentPane(root);
-            setPreferredSize(new Dimension(1100, 54));
+            setPreferredSize(new Dimension(1100, DOCKED_BAR_HEIGHT));
             pack();
         }
 
@@ -400,7 +430,7 @@ public final class VocabularyDesktopPlayerApp {
                 wordLabel.setText(textOrDash(card.word));
                 pronunciationLabel.setText(textOrDash(card.pronunciation));
                 typeLabel.setText(card.type == null || card.type.isBlank() ? "" : "(" + card.type.trim() + ")");
-                meaningLabel.setText(toHtml(textOrDash(card.meaning), 200));
+                meaningLabel.setText(toHtml(textOrDash(card.meaning)));
 
                 previousButton.setEnabled(cards.size() > 1);
                 nextButton.setEnabled(cards.size() > 1);
@@ -414,19 +444,22 @@ public final class VocabularyDesktopPlayerApp {
 
         private void applyPlacement() {
             if (placementMode == PlacementMode.ABOVE_SCREEN) {
-                applyDockedPlacement(WindowsAppBarHelper.ABE_TOP);
+                applyAboveScreenPlacement();
             } else if (placementMode == PlacementMode.BELOW_SCREEN) {
-                applyDockedPlacement(WindowsAppBarHelper.ABE_BOTTOM);
+                applyBelowScreenPlacement();
             } else {
                 applyOverlaidPlacement();
             }
         }
 
-        private void applyDockedPlacement(int edge) {
-            dockedEdge = edge;
-            setAlwaysOnTop(false);
-            setSize(getWidth(), DOCKED_BAR_HEIGHT);
-            appBarHelper.registerAppBar(this, edge);
+        private void applyAboveScreenPlacement() {
+            setAlwaysOnTop(true);
+            appBarHelper.registerAppBar(this, WindowsAppBarHelper.ABE_TOP, DOCKED_BAR_HEIGHT);
+        }
+
+        private void applyBelowScreenPlacement() {
+            setAlwaysOnTop(true);
+            appBarHelper.registerAppBar(this, WindowsAppBarHelper.ABE_BOTTOM, DOCKED_BAR_HEIGHT);
         }
 
         private void applyOverlaidPlacement() {
@@ -474,6 +507,17 @@ public final class VocabularyDesktopPlayerApp {
             setVisible(true);
         }
 
+        private void setCaptionStyle(int wordSize, int meaningSize, Color wordColor, Color meaningColor) {
+            wordLabel.setFont(new Font("SansSerif", Font.BOLD, wordSize));
+            wordLabel.setForeground(wordColor);
+            
+            meaningLabel.setFont(new Font("SansSerif", Font.PLAIN, meaningSize));
+            meaningLabel.setForeground(meaningColor);
+            
+            revalidate();
+            repaint();
+        }
+
         private void toggleSettingsMenu() {
             if (settingsMenu.isVisible()) {
                 settingsMenu.setVisible(false);
@@ -495,12 +539,26 @@ public final class VocabularyDesktopPlayerApp {
             return cards.get(currentIndex);
         }
 
+        private void toggleAutoPlay() {
+            isAutoPlay = !isAutoPlay;
+            if (isAutoPlay) {
+                autoPlayButton.setText("AUTO: ON");
+                autoPlayButton.setForeground(Color.GREEN); 
+                triggerSpeechSequence();
+            } else {
+                autoPlayButton.setText("AUTO: OFF");
+                autoPlayButton.setForeground(Color.WHITE);
+                speechSessionId++; // Đổi ID session để huỷ luồng auto đang chạy
+            }
+        }
+
         private void showPrevious() {
             if (cards.isEmpty()) {
                 return;
             }
             currentIndex = (currentIndex - 1 + cards.size()) % cards.size();
             refreshCard();
+            triggerSpeechSequence(); 
         }
 
         private void showNext() {
@@ -509,18 +567,40 @@ public final class VocabularyDesktopPlayerApp {
             }
             currentIndex = (currentIndex + 1) % cards.size();
             refreshCard();
+            triggerSpeechSequence(); 
         }
 
-        private void speakCurrentWord() {
+        private void triggerSpeechSequence() {
+            speechSessionId++; // Hủy tiến trình ngủ của lệnh cũ nếu user bấm liên tục
+            final int currentSession = speechSessionId;
+            
             VocabularyCard card = currentCard();
             if (card == null || card.word == null || card.word.isBlank()) {
                 return;
             }
 
             String word = card.word.trim();
+
             speechExecutor.submit(() -> {
                 try {
-                    speakWithWindowsSpeech(word);
+                    if (isAutoPlay) {
+                        // 1. Đọc Tiếng Anh lần 1
+                        speakWithWindowsSpeech(word);
+                        Thread.sleep(1200); // Khoảng nghỉ giữa 2 lần đọc
+                        if (currentSession != speechSessionId) return;
+
+                        // 2. Đọc Tiếng Anh lần 2
+                        speakWithWindowsSpeech(word);
+                        
+                        // 3. Chờ 4 giây trước khi tự động qua từ mới
+                        Thread.sleep(4000);
+                        if (currentSession == speechSessionId && isAutoPlay) {
+                            SwingUtilities.invokeLater(this::showNext);
+                        }
+                    } else {
+                        // Đọc 1 lần nếu bấm nút SPEAK thủ công
+                        speakWithWindowsSpeech(word);
+                    }
                 } catch (Exception ex) {
                     Toolkit.getDefaultToolkit().beep();
                 }
@@ -547,7 +627,7 @@ public final class VocabularyDesktopPlayerApp {
         private JButton createButton(String text) {
             JButton button = new JButton(text);
             button.setFocusPainted(false);
-            button.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+            button.setBorder(BorderFactory.createEmptyBorder(3, 10, 3, 10));
             button.setBackground(new Color(255, 255, 255, 24));
             button.setForeground(Color.WHITE);
             button.setOpaque(true);
@@ -555,21 +635,26 @@ public final class VocabularyDesktopPlayerApp {
             return button;
         }
 
-        private void styleLabel(JLabel label, Font font, Color color, int width) {
+        private void styleLabel(JLabel label, Font font, Color color, int width, boolean stretch) {
             label.setFont(font);
             label.setForeground(color);
             label.setOpaque(false);
             label.setVerticalAlignment(SwingConstants.CENTER);
-            label.setMaximumSize(new Dimension(width, Integer.MAX_VALUE));
             label.setPreferredSize(new Dimension(width, 28));
+            label.setMinimumSize(new Dimension(20, 28)); 
+            if (stretch) {
+                label.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+            } else {
+                label.setMaximumSize(new Dimension(width, Integer.MAX_VALUE));
+            }
         }
 
         private String textOrDash(String text) {
             return text == null || text.isBlank() ? "-" : text.trim();
         }
 
-        private String toHtml(String text, int width) {
-            return "<html><body style='width:" + width + "px'>" + escapeHtml(text) + "</body></html>";
+        private String toHtml(String text) {
+            return "<html><body style='margin:0; padding:0;'>" + escapeHtml(text) + "</body></html>";
         }
 
         private String escapeHtml(String text) {
@@ -795,7 +880,7 @@ public final class VocabularyDesktopPlayerApp {
     private static final class RoundedCardPanel extends JPanel {
         private RoundedCardPanel() {
             setOpaque(false);
-            setBackground(new Color(20, 26, 38, 220));
+            setBackground(new Color(20, 26, 38));
             setBorder(BorderFactory.createLineBorder(new Color(255, 255, 255, 28), 1));
         }
 
